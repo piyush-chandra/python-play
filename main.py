@@ -5,6 +5,16 @@ import tempfile
 import time
 import vercel_blob
 import httpx
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+# Debug: Check if token is loaded (do not print the full token in production logs)
+token = os.getenv("BLOB_READ_WRITE_TOKEN")
+print(f"Token loaded: {'Yes' if token else 'No'}")
+if token:
+    print(f"Token prefix: {token[:5]}...")
 
 app = FastAPI()
 
@@ -58,7 +68,7 @@ async def upload_file(file: UploadFile = File(...)):
         resp = vercel_blob.put(
             blob_name,
             content,
-            options={"add_random_suffix": False},
+            options={"piyus": False},
         )
 
         return {
