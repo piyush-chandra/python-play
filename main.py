@@ -1,7 +1,14 @@
-from fastapi import FastAPI
-import uvicorn
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.responses import FileResponse
+import os
+import shutil
+from pathlib import Path
+import time
 
 app = FastAPI()
+
+UPLOAD_DIR = Path("uploads")
+UPLOAD_DIR.mkdir(exist_ok=True)
 
 @app.get("/")
 def read_root():
@@ -11,5 +18,31 @@ def read_root():
 def health_check():
     return {"status": "ok"}
 
+@app.post("/upload")
+async def upload_file(file: UploadFile = File(...)):
+    if not file.filename.endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Only .zip files are allowed")
+    
+    # Use timestamp to ensure uniqueness and order
+    timestamp = int(time.time())
+    filename = f"{timestamp}_{file.filename}"
+    file_path = UPLOAD_DIR / filename
+    
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+        
+    return {"filename": filename, "status": "uploaded"}
+
+@app.get("/latest")
+def get_latest_file():
+    files = list(UPLOAD_DIR.glob("*.zip"))
+    if not files:
+        raise HTTPException(status_code=404, detail="No files uploaded")
+    
+    # Find the latest file based on modification time
+    latest_file = max(files, key=os.path.getmtime)
+    return FileResponse(latest_file)
+
 if __name__ == "__main__":
+    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
