@@ -35,7 +35,7 @@ def health_check():
     return {"status": "ok"}
 
 
-@app.post("/upload")
+@app.get("/upload")
 async def upload_file(file: UploadFile = File(...)):
     """
     Uploads file from client → temp disk → Vercel Blob.
