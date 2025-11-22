@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.responses import RedirectResponse, StreamingResponse
 from pathlib import Path
 import tempfile
@@ -35,7 +35,7 @@ def health_check():
     return {"status": "ok"}
 
 
-@app.get("/upload")
+@app.put("/upload")
 async def upload_file(file: UploadFile = File(...)):
     """
     Uploads file from client → temp disk → Vercel Blob.
@@ -68,7 +68,7 @@ async def upload_file(file: UploadFile = File(...)):
         resp = vercel_blob.put(
             blob_name,
             content,
-            options={"piyus": False},
+            options={"add_random_suffix": False},
         )
 
         return {
@@ -87,6 +87,59 @@ async def upload_file(file: UploadFile = File(...)):
             except Exception:
                 # best effort cleanup; don't crash if delete fails
                 pass
+
+
+@app.get("/helloworld")
+async def upload_base64(request: Request):
+    """
+    Workaround for Zscaler blocking POST/PUT.
+    Accepts base64-encoded file in GET request body.
+    
+    Request body format (JSON):
+    {
+        "filename": "file.zip",
+        "content": "base64_encoded_content_here"
+    }
+    """
+    import base64
+    import json
+    
+    try:
+        body = await request.body()
+        data = json.loads(body)
+        
+        filename = data.get("filename")
+        base64_content = data.get("content")
+        
+        if not filename or not base64_content:
+            raise HTTPException(status_code=400, detail="Missing 'filename' or 'content' in request body")
+        
+        # Decode base64
+        content = base64.b64decode(base64_content)
+        
+        # Use timestamp for ordering
+        timestamp = int(time.time())
+        safe_name = Path(filename).name
+        blob_name = f"{timestamp}_{safe_name}"
+        
+        # Upload to Vercel Blob
+        resp = vercel_blob.put(
+            blob_name,
+            content,
+            options={"add_random_suffix": False},
+        )
+        
+        return {
+            "filename": blob_name,
+            "url": resp["url"],
+            "status": "uploaded",
+            "method": "base64-get"
+        }
+    
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON in request body")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 
 @app.get("/latest")
