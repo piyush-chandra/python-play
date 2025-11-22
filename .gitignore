@@ -39,3 +39,4 @@ env/
 .LSOverride
 ._*
 uploads/
+.env*
