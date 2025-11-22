@@ -1,14 +1,15 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, RedirectResponse
 import os
 import shutil
 from pathlib import Path
 import time
 import tempfile
+import vercel_blob
 
 app = FastAPI()
 
-# Use /tmp for serverless environments (ephemeral storage)
+# Use /tmp for temporary storage if needed, but main storage is now Vercel Blob
 UPLOAD_DIR = Path(tempfile.gettempdir()) / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
@@ -28,22 +29,34 @@ async def upload_file(file: UploadFile = File(...)):
     # Use timestamp to ensure uniqueness and order
     timestamp = int(time.time())
     filename = f"{timestamp}_{file.filename}"
-    file_path = UPLOAD_DIR / filename
     
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-        
-    return {"filename": filename, "status": "uploaded"}
+    # Read file content
+    content = await file.read()
+    
+    try:
+        # Upload to Vercel Blob
+        resp = vercel_blob.put(filename, content, options={'add_random_suffix': False})
+        return {"filename": filename, "url": resp['url'], "status": "uploaded"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 @app.get("/latest")
 def get_latest_file():
-    files = list(UPLOAD_DIR.glob("*.zip"))
-    if not files:
-        raise HTTPException(status_code=404, detail="No files uploaded")
-    
-    # Find the latest file based on modification time
-    latest_file = max(files, key=os.path.getmtime)
-    return FileResponse(latest_file, media_type="application/zip", filename=latest_file.name)
+    try:
+        # List blobs
+        blobs = vercel_blob.list()
+        zip_blobs = [b for b in blobs['blobs'] if b['pathname'].endswith('.zip')]
+        
+        if not zip_blobs:
+            raise HTTPException(status_code=404, detail="No files uploaded")
+        
+        # Find latest blob by uploadedAt
+        latest_blob = max(zip_blobs, key=lambda x: x['uploadedAt'])
+        
+        # Redirect to the blob URL
+        return RedirectResponse(url=latest_blob['url'])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve latest file: {str(e)}")
 
 @app.post("/stream")
 async def stream_file(file: UploadFile = File(...)):
