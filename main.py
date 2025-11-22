@@ -1,13 +1,15 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 import os
 import shutil
 from pathlib import Path
 import time
+import tempfile
 
 app = FastAPI()
 
-UPLOAD_DIR = Path("uploads")
+# Use /tmp for serverless environments (ephemeral storage)
+UPLOAD_DIR = Path(tempfile.gettempdir()) / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
 @app.get("/")
@@ -42,6 +44,10 @@ def get_latest_file():
     # Find the latest file based on modification time
     latest_file = max(files, key=os.path.getmtime)
     return FileResponse(latest_file, media_type="application/zip", filename=latest_file.name)
+
+@app.post("/stream")
+async def stream_file(file: UploadFile = File(...)):
+    return StreamingResponse(file.file, media_type=file.content_type, headers={"Content-Disposition": f"attachment; filename={file.filename}"})
 
 if __name__ == "__main__":
     import uvicorn
