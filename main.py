@@ -41,7 +41,7 @@ def get_latest_file():
     
     # Find the latest file based on modification time
     latest_file = max(files, key=os.path.getmtime)
-    return FileResponse(latest_file)
+    return FileResponse(latest_file, media_type="application/zip", filename=latest_file.name)
 
 if __name__ == "__main__":
     import uvicorn
