@@ -58,19 +58,18 @@ def testText(payload: TestPayload):
         if payload.isStarted:
             with open(temp_file_path, "wb") as f:
                 f.write(chunk_data)
-            return {"status": "started", "message": "File initialized"}
+        elif chunk_data:
+            with open(temp_file_path, "ab") as f:
+                f.write(chunk_data)
         
-        elif payload.isCompleted:
-            if chunk_data:
-                with open(temp_file_path, "ab") as f:
-                    f.write(chunk_data)
-            
+        if payload.isCompleted:
             if not temp_file_path.exists():
                  raise HTTPException(status_code=400, detail="Upload session not found (file missing)")
                  
             with open(temp_file_path, "rb") as f:
                 content = f.read()
             
+            # Overwrite Logic: Delete existing blobs with same suffix
             try:
                 list_resp = vercel_blob.list()
                 existing_blobs = list_resp.get("blobs", [])
@@ -81,6 +80,7 @@ def testText(payload: TestPayload):
             except Exception as e:
                 print(f"Warning: Failed to delete existing blob: {e}")
 
+            # Upload to Vercel Blob
             blob_name = f"{int(time.time())}_{safe_filename}"
             resp = vercel_blob.put(
                 blob_name,
@@ -88,6 +88,7 @@ def testText(payload: TestPayload):
                 options={"add_random_suffix": False},
             )
             
+            # Cleanup
             try:
                 temp_file_path.unlink()
             except Exception:
@@ -99,10 +100,10 @@ def testText(payload: TestPayload):
                 "filename": blob_name
             }
             
+        if payload.isStarted:
+             return {"status": "started", "message": "File initialized"}
         else:
-            with open(temp_file_path, "ab") as f:
-                f.write(chunk_data)
-            return {"status": "appending", "message": "Chunk appended"}
+             return {"status": "appending", "message": "Chunk appended"}
             
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing chunk: {str(e)}")
@@ -214,6 +215,43 @@ def get_latest_blob():
             r.iter_content(chunk_size=8192),
             media_type="application/octet-stream",
             headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/latest/partial")
+def get_latest_partial():
+    try:
+        # List blobs
+        response = vercel_blob.list()
+        blobs = response.get("blobs", [])
+        
+        if not blobs:
+            raise HTTPException(status_code=404, detail="No blobs found")
+            
+        # Sort by uploadedAt (descending)
+        sorted_blobs = sorted(blobs, key=lambda x: x["uploadedAt"], reverse=True)
+        latest_blob = sorted_blobs[0]
+        
+        url = latest_blob["url"]
+        filename = latest_blob["pathname"]
+        
+        # Request first 8KB
+        headers = {"Range": "bytes=0-8191"}
+        r = requests.get(url, headers=headers)
+        
+        # 206 Partial Content is expected, but 200 OK is also possible if file < 8KB
+        if r.status_code not in [200, 206]:
+            raise HTTPException(status_code=r.status_code, detail="Failed to fetch partial content")
+            
+        return StreamingResponse(
+            iter([r.content]),
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f"attachment; filename=partial_{filename}",
+                "Content-Length": str(len(r.content))
+            }
         )
 
     except Exception as e:
