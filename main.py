@@ -1,5 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.responses import RedirectResponse, StreamingResponse
+from pydantic import BaseModel
 from pathlib import Path
 import tempfile
 from dotenv import load_dotenv
@@ -31,9 +32,14 @@ def health_check():
     return {"status": "ok"}
 
 # check text post working or not
+class TestPayload(BaseModel):
+    text: str
+    isCompleted: bool
+
+# this is for client side testing
 @app.post("/test")
-def test_text(request: Request):
-    return request.body()
+def test_text(payload: TestPayload):
+    return payload
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
