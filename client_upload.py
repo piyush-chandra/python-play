@@ -57,11 +57,8 @@ def upload_file(file_path):
                 return
 
             chunk_number += 1
-            # Optional: small delay to not overwhelm if needed, but local is fine
-            # time.sleep(0.01) 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python client_upload.py <file_path>")
     else:
         upload_file(sys.argv[1])

@@ -70,7 +70,17 @@ def testText(payload: TestPayload):
                  
             with open(temp_file_path, "rb") as f:
                 content = f.read()
-                
+            
+            try:
+                list_resp = vercel_blob.list()
+                existing_blobs = list_resp.get("blobs", [])
+                for b in existing_blobs:
+                    if b["pathname"].endswith(f"_{safe_filename}") or b["pathname"] == safe_filename:
+                        print(f"Deleting existing blob: {b['pathname']}")
+                        vercel_blob.delete(b["url"])
+            except Exception as e:
+                print(f"Warning: Failed to delete existing blob: {e}")
+
             blob_name = f"{int(time.time())}_{safe_filename}"
             resp = vercel_blob.put(
                 blob_name,
@@ -97,9 +107,7 @@ def testText(payload: TestPayload):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing chunk: {str(e)}")
 
-@app.post("/test1")
-def testText(payload: TestPayload):
-    return payload
+
 
 @app.put("/pupload")
 async def upload_file(file: UploadFile = File(...)):
@@ -145,26 +153,60 @@ async def upload_file(file: UploadFile = File(...)):
             except Exception:
                 pass
 
-@app.get("/latest")
-def get_latest_blob():
+@app.get("/download")
+def download_file(filename: str):
     try:
-        # List blobs
         response = vercel_blob.list()
         blobs = response.get("blobs", [])
         
         if not blobs:
             raise HTTPException(status_code=404, detail="No blobs found")
             
-        # Sort by uploadedAt (descending)
+        target_blob = None
+        
+        matches = [
+            b for b in blobs 
+            if b["pathname"].endswith(f"_{filename}") or b["pathname"] == filename
+        ]
+        
+        if not matches:
+             raise HTTPException(status_code=404, detail=f"File '{filename}' not found")
+             
+        matches.sort(key=lambda x: x["uploadedAt"], reverse=True)
+        target_blob = matches[0]
+        
+        url = target_blob["url"]
+        blob_pathname = target_blob["pathname"]
+        
+        r = requests.get(url, stream=True)
+        r.raise_for_status()
+        
+        return StreamingResponse(
+            r.iter_content(chunk_size=8192),
+            media_type="application/octet-stream",
+            headers={"Content-Disposition": f"attachment; filename={blob_pathname}"}
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/latest")
+def get_latest_blob():
+    try:
+        response = vercel_blob.list()
+        blobs = response.get("blobs", [])
+        
+        if not blobs:
+            raise HTTPException(status_code=404, detail="No blobs found")
+            
         sorted_blobs = sorted(blobs, key=lambda x: x["uploadedAt"], reverse=True)
         latest_blob = sorted_blobs[0]
         
-        # Proxy the download
         url = latest_blob["url"]
         filename = latest_blob["pathname"]
-        
-        # Use requests to stream the content
-        # Note: This is a synchronous path operation, so FastAPI runs it in a threadpool
+
         r = requests.get(url, stream=True)
         r.raise_for_status()
         
