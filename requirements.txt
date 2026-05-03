@@ -1,6 +1,6 @@
 fastapi
 uvicorn
 python-multipart
-vercel-blob
+boto3
 httpx
 python-dotenv

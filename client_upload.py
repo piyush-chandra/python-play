@@ -6,6 +6,7 @@ import sys
 import time
 
 BASE_URL = "http://localhost:8000"
+BASE_URL = os.getenv("BASE_URL", BASE_URL)
 CHUNK_SIZE = 100 * 1024  # 100KB
 
 def upload_file(file_path):
@@ -14,7 +15,7 @@ def upload_file(file_path):
         return
 
     file_size = os.path.getsize(file_path)
-    total_chunks = math.ceil(file_size / CHUNK_SIZE)
+    total_chunks = max(1, math.ceil(file_size / CHUNK_SIZE))
     filename = os.path.basename(file_path)
 
     print(f"Uploading '{filename}' ({file_size} bytes) in {total_chunks} chunks...")
@@ -23,7 +24,9 @@ def upload_file(file_path):
         chunk_number = 1
         while True:
             chunk = f.read(CHUNK_SIZE)
-            if not chunk:
+            if not chunk and file_size == 0 and chunk_number == 1:
+                chunk = b""
+            elif not chunk:
                 break
 
             is_started = (chunk_number == 1)
@@ -50,7 +53,7 @@ def upload_file(file_path):
                 
                 if is_completed:
                     print("\nUpload Complete!")
-                    print(f"Blob URL: {result.get('url')}")
+                    print(f"R2 URL: {result.get('url')}")
                     
             except requests.exceptions.RequestException as e:
                 print(f"\nError uploading chunk {chunk_number}: {e}")
@@ -60,5 +63,6 @@ def upload_file(file_path):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
+        print(f"Usage: python {sys.argv[0]} <file_path>")
     else:
         upload_file(sys.argv[1])

@@ -1,5 +1,5 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request
-from fastapi.responses import RedirectResponse, StreamingResponse
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from pathlib import Path
 import tempfile
@@ -7,16 +7,13 @@ from dotenv import load_dotenv
 import time
 import os
 import uvicorn
-import vercel_blob
-import requests
 import base64
+import r2_storage
 
 load_dotenv()
 
-token = os.getenv("BLOB_READ_WRITE_TOKEN")
-print(f"Token loaded: {'Yes' if token else 'No'}")
-if token:
-    print(f"Token prefix: {token[:5]}...")
+r2_bucket = os.getenv("R2_BUCKET_NAME")
+print(f"R2 bucket configured: {'Yes' if r2_bucket else 'No'}")
 
 app = FastAPI()
 
@@ -69,24 +66,14 @@ def testText(payload: TestPayload):
             with open(temp_file_path, "rb") as f:
                 content = f.read()
             
-            # Overwrite Logic: Delete existing blobs with same suffix
+            # Overwrite Logic: Delete existing R2 objects with same suffix
             try:
-                list_resp = vercel_blob.list()
-                existing_blobs = list_resp.get("blobs", [])
-                for b in existing_blobs:
-                    if b["pathname"].endswith(f"_{safe_filename}") or b["pathname"] == safe_filename:
-                        print(f"Deleting existing blob: {b['pathname']}")
-                        vercel_blob.delete(b["url"])
+                r2_storage.delete_matching_filename(safe_filename)
             except Exception as e:
-                print(f"Warning: Failed to delete existing blob: {e}")
+                print(f"Warning: Failed to delete existing R2 object: {e}")
 
-            # Upload to Vercel Blob
-            blob_name = f"{int(time.time())}_{safe_filename}"
-            resp = vercel_blob.put(
-                blob_name,
-                content,
-                options={"add_random_suffix": False},
-            )
+            object_name = f"{int(time.time())}_{safe_filename}"
+            resp = r2_storage.put_object(object_name, content)
             
             # Cleanup
             try:
@@ -97,7 +84,7 @@ def testText(payload: TestPayload):
             return {
                 "status": "completed", 
                 "url": resp["url"],
-                "filename": blob_name
+                "filename": object_name
             }
             
         if payload.isStarted:
@@ -105,6 +92,8 @@ def testText(payload: TestPayload):
         else:
              return {"status": "appending", "message": "Chunk appended"}
             
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing chunk: {str(e)}")
 
@@ -118,9 +107,9 @@ async def upload_file(file: UploadFile = File(...)):
 
     timestamp = int(time.time())
     safe_name = Path(file.filename).name 
-    blob_name = f"{timestamp}_{safe_name}"
+    object_name = f"{timestamp}_{safe_name}"
 
-    tmp_path = UPLOAD_DIR / blob_name
+    tmp_path = UPLOAD_DIR / object_name
 
     try:
         with tmp_path.open("wb") as out_file:
@@ -133,14 +122,10 @@ async def upload_file(file: UploadFile = File(...)):
         with tmp_path.open("rb") as f:
             content = f.read()
 
-        resp = vercel_blob.put(
-            blob_name,
-            content,
-            options={"add_random_suffix": False},
-        )
+        resp = r2_storage.put_object(object_name, content, file.content_type)
 
         return {
-            "filename": blob_name,
+            "filename": object_name,
             "url": resp["url"],
             "status": "uploaded",
         }
@@ -157,35 +142,18 @@ async def upload_file(file: UploadFile = File(...)):
 @app.get("/download")
 def download_file(filename: str):
     try:
-        response = vercel_blob.list()
-        blobs = response.get("blobs", [])
-        
-        if not blobs:
-            raise HTTPException(status_code=404, detail="No blobs found")
-            
-        target_blob = None
-        
-        matches = [
-            b for b in blobs 
-            if b["pathname"].endswith(f"_{filename}") or b["pathname"] == filename
-        ]
-        
-        if not matches:
+        target_object = r2_storage.find_latest_by_filename(filename)
+
+        if not target_object:
              raise HTTPException(status_code=404, detail=f"File '{filename}' not found")
-             
-        matches.sort(key=lambda x: x["uploadedAt"], reverse=True)
-        target_blob = matches[0]
-        
-        url = target_blob["url"]
-        blob_pathname = target_blob["pathname"]
-        
-        r = requests.get(url, stream=True)
-        r.raise_for_status()
+
+        object_key = target_object["key"]
+        r2_response = r2_storage.get_object_stream(object_key)
         
         return StreamingResponse(
-            r.iter_content(chunk_size=8192),
+            r2_storage.iter_body(r2_response["Body"], chunk_size=8192),
             media_type="application/octet-stream",
-            headers={"Content-Disposition": f"attachment; filename={blob_pathname}"}
+            headers={"Content-Disposition": f"attachment; filename={object_key}"}
         )
 
     except HTTPException:
@@ -194,66 +162,51 @@ def download_file(filename: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/latest")
-def get_latest_blob():
+def get_latest_object():
     try:
-        response = vercel_blob.list()
-        blobs = response.get("blobs", [])
-        
-        if not blobs:
-            raise HTTPException(status_code=404, detail="No blobs found")
-            
-        sorted_blobs = sorted(blobs, key=lambda x: x["uploadedAt"], reverse=True)
-        latest_blob = sorted_blobs[0]
-        
-        url = latest_blob["url"]
-        filename = latest_blob["pathname"]
+        latest_object = r2_storage.latest_object()
 
-        r = requests.get(url, stream=True)
-        r.raise_for_status()
+        if not latest_object:
+            raise HTTPException(status_code=404, detail="No R2 objects found")
+
+        filename = latest_object["key"]
+        r2_response = r2_storage.get_object_stream(filename)
         
         return StreamingResponse(
-            r.iter_content(chunk_size=8192),
+            r2_storage.iter_body(r2_response["Body"], chunk_size=8192),
             media_type="application/octet-stream",
             headers={"Content-Disposition": f"attachment; filename={filename}"}
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/latest/partial")
 def get_latest_partial():
     try:
-        # List blobs
-        response = vercel_blob.list()
-        blobs = response.get("blobs", [])
-        
-        if not blobs:
-            raise HTTPException(status_code=404, detail="No blobs found")
-            
-        # Sort by uploadedAt (descending)
-        sorted_blobs = sorted(blobs, key=lambda x: x["uploadedAt"], reverse=True)
-        latest_blob = sorted_blobs[0]
-        
-        url = latest_blob["url"]
-        filename = latest_blob["pathname"]
-        
-        # Request first 8KB
-        headers = {"Range": "bytes=0-8191"}
-        r = requests.get(url, headers=headers)
-        
-        # 206 Partial Content is expected, but 200 OK is also possible if file < 8KB
-        if r.status_code not in [200, 206]:
-            raise HTTPException(status_code=r.status_code, detail="Failed to fetch partial content")
+        latest_object = r2_storage.latest_object()
+
+        if not latest_object:
+            raise HTTPException(status_code=404, detail="No R2 objects found")
+
+        filename = latest_object["key"]
+        r2_response = r2_storage.get_object_stream(filename, byte_range="bytes=0-8191")
+        content = r2_response["Body"].read()
+        r2_response["Body"].close()
             
         return StreamingResponse(
-            iter([r.content]),
+            iter([content]),
             media_type="application/octet-stream",
             headers={
                 "Content-Disposition": f"attachment; filename=partial_{filename}",
-                "Content-Length": str(len(r.content))
+                "Content-Length": str(len(content))
             }
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

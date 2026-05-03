@@ -36,9 +36,9 @@
 #     print(f"Complete: {r.status_code} - {r.json()}")
 #     assert r.status_code == 200
     
-#     blob_url = r.json().get("url")
-#     print(f"Blob URL: {blob_url}")
-#     return blob_url
+#     r2_url = r.json().get("url")
+#     print(f"R2 URL: {r2_url}")
+#     return r2_url
 
 # def test_latest_download(expected_url):
 #     print("\nTesting Latest Download...")

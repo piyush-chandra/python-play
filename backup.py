@@ -3,18 +3,16 @@ from fastapi.responses import RedirectResponse, StreamingResponse
 from pathlib import Path
 import tempfile
 import time
-import vercel_blob
 import httpx
 from dotenv import load_dotenv
 import os
+import r2_storage
 
 load_dotenv()
 
 
-token = os.getenv("BLOB_READ_WRITE_TOKEN")
-print(f"Token loaded: {'Yes' if token else 'No'}")
-if token:
-    print(f"Token prefix: {token[:5]}...")
+r2_bucket = os.getenv("R2_BUCKET_NAME")
+print(f"R2 bucket configured: {'Yes' if r2_bucket else 'No'}")
 @app.put("/upload")
 async def upload_file(file: UploadFile = File(...)):
     
@@ -23,9 +21,9 @@ async def upload_file(file: UploadFile = File(...)):
 
     timestamp = int(time.time())
     safe_name = Path(file.filename).name 
-    blob_name = f"{timestamp}_{safe_name}"
+    object_name = f"{timestamp}_{safe_name}"
 
-    tmp_path = UPLOAD_DIR / blob_name
+    tmp_path = UPLOAD_DIR / object_name
 
     try:
         with tmp_path.open("wb") as out_file:
@@ -38,14 +36,10 @@ async def upload_file(file: UploadFile = File(...)):
         with tmp_path.open("rb") as f:
             content = f.read()
 
-        resp = vercel_blob.put(
-            blob_name,
-            content,
-            options={"add_random_suffix": False},
-        )
+        resp = r2_storage.put_object(object_name, content, file.content_type)
 
         return {
-            "filename": blob_name,
+            "filename": object_name,
             "url": resp["url"],
             "status": "uploaded",
         }
@@ -77,17 +71,12 @@ async def upload_binary(request: Request):
         # Use timestamp for ordering
         timestamp = int(time.time())
         safe_name = Path(filename).name
-        blob_name = f"{timestamp}_{safe_name}"
+        object_name = f"{timestamp}_{safe_name}"
         
-        # Upload to Vercel Blob
-        resp = vercel_blob.put(
-            blob_name,
-            content,
-            options={"add_random_suffix": False},
-        )
+        resp = r2_storage.put_object(object_name, content)
         
         return {
-            "filename": blob_name,
+            "filename": object_name,
             "url": resp["url"],
             "status": "uploaded",
             "size": len(content),
@@ -96,5 +85,4 @@ async def upload_binary(request: Request):
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
-
 

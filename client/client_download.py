@@ -2,8 +2,10 @@ import requests
 import re
 import os
 import sys
+import time
 
 BASE_URL = "http://localhost:8000"
+BASE_URL = os.getenv("BASE_URL", BASE_URL)
 CHUNK_SIZE = 8192  # 8KB chunks for download
 
 def get_filename_from_cd(cd):
